@@ -1,4 +1,3 @@
-
 # heartbeat_simulator.py
 """
 无人机心跳包模拟程序
@@ -6,10 +5,9 @@
 """
 
 import time
-import random
-import threading
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict
+import random
 
 class DroneHeartbeatSimulator:
     """无人机心跳包模拟器"""
@@ -20,44 +18,49 @@ class DroneHeartbeatSimulator:
         self.last_heartbeat_time = None
         self.running = False
         self.simulate_failure = False  # 模拟掉线开关
+        self.failure_start_time = None
         
     def generate_heartbeat(self, seq_num: int) -> Dict:
         """生成单个心跳包"""
         return {
             "序号": seq_num,
-            "时间戳": datetime.now().strftime("%H:%M:%S"),
-            "原始时间": datetime.now(),
-            "状态": "正常"
+            "时间戳": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            "完整时间": datetime.now(),
+            "状态": "正常",
+            "延迟_ms": round(random.uniform(5, 50), 2)  # 模拟网络延迟
         }
     
-    def start_simulator(self, callback=None):
-        """启动心跳模拟器"""
-        self.running = True
-        seq = 0
+    def update_heartbeat(self):
+        """手动更新一次心跳（用于Streamlit的按钮触发）"""
+        if not self.running:
+            return None
         
-        while self.running:
-            try:
-                seq += 1
-                heartbeat = self.generate_heartbeat(seq)
-                self.heartbeats.append(heartbeat)
-                self.last_heartbeat_time = time.time()
-                
-                # 调用回调函数（用于Streamlit实时更新）
-                if callback:
-                    callback(heartbeat)
-                
-                print(f"[心跳] 序号: {seq}, 时间: {heartbeat['时间戳']}")
-                
-                # 模拟随机掉线（可选）
-                if self.simulate_failure and random.random() < 0.1:
-                    print("[警告] 模拟信号中断...")
-                    time.sleep(4)  # 模拟掉线4秒
-                else:
-                    time.sleep(1)
-                    
-            except Exception as e:
-                print(f"心跳生成错误: {e}")
-                time.sleep(1)
+        # 模拟信号中断
+        if self.simulate_failure:
+            if self.failure_start_time is None:
+                self.failure_start_time = time.time()
+            
+            # 中断持续4秒
+            if time.time() - self.failure_start_time < 4:
+                # 不生成新心跳，模拟掉线
+                self.check_connection()
+                return None
+            else:
+                # 恢复连接
+                self.simulate_failure = False
+                self.failure_start_time = None
+                self.is_connected = True
+        
+        # 生成新心跳
+        seq_num = len(self.heartbeats) + 1
+        heartbeat = self.generate_heartbeat(seq_num)
+        self.heartbeats.append(heartbeat)
+        self.last_heartbeat_time = time.time()
+        
+        # 检查连接状态
+        self.check_connection()
+        
+        return heartbeat
     
     def check_connection(self) -> bool:
         """检查连接状态，3秒没收到心跳判定为掉线"""
@@ -75,13 +78,31 @@ class DroneHeartbeatSimulator:
         
         return self.is_connected
     
-    def stop_simulator(self):
+    def start(self):
+        """启动模拟器"""
+        self.running = True
+        self.heartbeats = []
+        self.last_heartbeat_time = None
+        self.is_connected = True
+        
+    def stop(self):
         """停止模拟器"""
         self.running = False
     
     def get_heartbeat_data(self) -> List[Dict]:
         """获取心跳数据列表"""
         return self.heartbeats
+    
+    def get_latest_heartbeat(self) -> Dict:
+        """获取最新心跳数据"""
+        if self.heartbeats:
+            return self.heartbeats[-1]
+        return None
+    
+    def get_connection_status(self) -> tuple:
+        """获取连接状态和最后心跳时间"""
+        self.check_connection()
+        return self.is_connected, self.last_heartbeat_time
 
 
 # 独立运行测试
@@ -91,14 +112,25 @@ if __name__ == "__main__":
     print("=" * 50)
     
     simulator = DroneHeartbeatSimulator()
-    
-    # 在后台线程中运行
-    def test_callback(hb):
-        # 检查连接状态
-        simulator.check_connection()
+    simulator.start()
     
     try:
-        simulator.start_simulator(callback=test_callback)
+        for i in range(15):  # 测试15秒
+            heartbeat = simulator.update_heartbeat()
+            if heartbeat:
+                print(f"[心跳] 序号: {heartbeat['序号']}, "
+                      f"时间: {heartbeat['时间戳']}, "
+                      f"延迟: {heartbeat['延迟_ms']}ms")
+            
+            status, last_time = simulator.get_connection_status()
+            if not status:
+                print("⚠️ 当前状态: 掉线中...")
+            else:
+                print(f"✅ 连接正常")
+            
+            time.sleep(1)
+            
     except KeyboardInterrupt:
         print("\n模拟器已停止")
-        simulator.stop_simulator()
+        simulator.stop()
+
