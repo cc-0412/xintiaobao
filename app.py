@@ -6,11 +6,26 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime
 import time
 import random
 import math
+
+# ==================== 初始化 Session State ====================
+def init_session_state():
+    """初始化所有session state变量"""
+    if 'waypoints' not in st.session_state:
+        st.session_state.waypoints = {'A': None, 'B': None}
+    if 'is_flying' not in st.session_state:
+        st.session_state.is_flying = False
+    if 'heartbeat_sim' not in st.session_state:
+        st.session_state.heartbeat_sim = None
+    if 'coord_system' not in st.session_state:
+        st.session_state.coord_system = "GCJ-02 (高德/百度地图)"
+    if 'altitude' not in st.session_state:
+        st.session_state.altitude = 50
+    if 'speed' not in st.session_state:
+        st.session_state.speed = 10
 
 # ==================== 坐标系转换工具 ====================
 def gcj02_to_wgs84(lng, lat):
@@ -92,12 +107,14 @@ class HeartbeatSimulator:
         self.is_connected = True
         self.last_time = None
         self.running = False
+        self.last_heartbeat = None
         
     def start(self):
         self.running = True
         self.heartbeats = []
         self.last_time = None
         self.is_connected = True
+        self.last_heartbeat = None
         
     def stop(self):
         self.running = False
@@ -111,19 +128,20 @@ class HeartbeatSimulator:
         heartbeat = {
             "序号": seq,
             "时间": datetime.now().strftime("%H:%M:%S"),
+            "完整时间": datetime.now(),
             "延迟": round(random.uniform(10, 50), 1),
             "信号强度": round(random.uniform(70, 100), 1)
         }
         self.heartbeats.append(heartbeat)
         self.last_time = now
-        
-        # 检查掉线
+        self.last_heartbeat = heartbeat
         return heartbeat
     
     def check_connection(self):
         if self.last_time is None:
             return True
-        if time.time() - self.last_time > 3:
+        time_since = time.time() - self.last_time
+        if time_since > 3:
             self.is_connected = False
         else:
             self.is_connected = True
@@ -133,17 +151,21 @@ class HeartbeatSimulator:
 def page_route_planning():
     st.header("🗺️ 航线规划")
     
-    # 侧边栏控制
-    with st.sidebar:
+    # 使用两列布局
+    left_col, right_col = st.columns([1, 2])
+    
+    with left_col:
         st.markdown("### 🎮 控制面板")
         
-        # 坐标系选择
+        # 坐标系设置
         st.markdown("#### 坐标系设置")
-        coord_system = st.selectbox(
+        coord_system = st.radio(
             "输入坐标系",
             ["GCJ-02 (高德/百度地图)", "WGS-84 (GPS)"],
-            key="coord_system"
+            index=0,
+            key="coord_select"
         )
+        st.session_state.coord_system = coord_system
         
         st.markdown("---")
         
@@ -151,12 +173,28 @@ def page_route_planning():
         st.markdown("#### 起点 A")
         col1, col2 = st.columns(2)
         with col1:
-            lat_a = st.number_input("纬度", value=32.2322, format="%.6f", key="lat_a")
+            lat_a_input = st.number_input(
+                "纬度", 
+                value=32.232200, 
+                format="%.6f",
+                key="lat_a_input",
+                step=0.0001
+            )
         with col2:
-            lng_a = st.number_input("经度", value=118.7490, format="%.6f", key="lng_a")
+            lng_a_input = st.number_input(
+                "经度", 
+                value=118.749000, 
+                format="%.6f",
+                key="lng_a_input",
+                step=0.0001
+            )
         
-        if st.button("📍 设置A点", use_container_width=True):
-            st.session_state.waypoints['A'] = {'lat': lat_a, 'lng': lng_a, 'coord': coord_system}
+        if st.button("📍 设置A点", use_container_width=True, key="set_a"):
+            st.session_state.waypoints['A'] = {
+                'lat': lat_a_input, 
+                'lng': lng_a_input, 
+                'coord': coord_system
+            }
             st.success("✅ A点已设置")
             st.rerun()
         
@@ -166,12 +204,28 @@ def page_route_planning():
         st.markdown("#### 终点 B")
         col3, col4 = st.columns(2)
         with col3:
-            lat_b = st.number_input("纬度", value=32.2343, format="%.6f", key="lat_b")
+            lat_b_input = st.number_input(
+                "纬度", 
+                value=32.234300, 
+                format="%.6f",
+                key="lat_b_input",
+                step=0.0001
+            )
         with col4:
-            lng_b = st.number_input("经度", value=118.7510, format="%.6f", key="lng_b")
+            lng_b_input = st.number_input(
+                "经度", 
+                value=118.751000, 
+                format="%.6f",
+                key="lng_b_input",
+                step=0.0001
+            )
         
-        if st.button("📍 设置B点", use_container_width=True):
-            st.session_state.waypoints['B'] = {'lat': lat_b, 'lng': lng_b, 'coord': coord_system}
+        if st.button("📍 设置B点", use_container_width=True, key="set_b"):
+            st.session_state.waypoints['B'] = {
+                'lat': lat_b_input, 
+                'lng': lng_b_input, 
+                'coord': coord_system
+            }
             st.success("✅ B点已设置")
             st.rerun()
         
@@ -179,159 +233,159 @@ def page_route_planning():
         
         # 飞行参数
         st.markdown("#### 飞行参数")
-        altitude = st.slider("飞行高度 (m)", 20, 200, 50, key="altitude")
-        speed = st.slider("飞行速度 (m/s)", 5, 30, 10, key="speed")
+        altitude = st.slider("飞行高度 (m)", 20, 200, 50, key="altitude_slider")
+        speed = st.slider("飞行速度 (m/s)", 5, 30, 10, key="speed_slider")
+        st.session_state.altitude = altitude
+        st.session_state.speed = speed
         
-        # 障碍物设置
-        st.markdown("#### 障碍物设置")
-        show_obstacles = st.checkbox("显示障碍物", value=True)
+        # 障碍物
+        show_obstacles = st.checkbox("显示障碍物", value=True, key="show_obs")
     
-    # 主显示区域
-    # 显示AB点状态
-    col_a, col_b, col_info = st.columns(3)
-    
-    with col_a:
-        if st.session_state.waypoints['A']:
-            a = st.session_state.waypoints['A']
-            st.info(f"📍 **A点**\n\n纬度: {a['lat']:.6f}\n经度: {a['lng']:.6f}\n坐标系: {a['coord']}")
-        else:
-            st.warning("⚠️ A点未设置")
-    
-    with col_b:
-        if st.session_state.waypoints['B']:
-            b = st.session_state.waypoints['B']
-            st.info(f"🎯 **B点**\n\n纬度: {b['lat']:.6f}\n经度: {b['lng']:.6f}\n坐标系: {b['coord']}")
-        else:
-            st.warning("⚠️ B点未设置")
-    
-    with col_info:
+    with right_col:
+        # 显示当前设置的点
+        st.markdown("### 📍 当前航点")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.session_state.waypoints['A']:
+                a = st.session_state.waypoints['A']
+                st.info(f"**起点 A**\n\n📍 纬度: {a['lat']:.6f}\n📍 经度: {a['lng']:.6f}\n📐 坐标系: {a['coord'].split()[0]}")
+            else:
+                st.warning("⚠️ 起点 A 未设置")
+        
+        with col_b:
+            if st.session_state.waypoints['B']:
+                b = st.session_state.waypoints['B']
+                st.info(f"**终点 B**\n\n📍 纬度: {b['lat']:.6f}\n📍 经度: {b['lng']:.6f}\n📐 坐标系: {b['coord'].split()[0]}")
+            else:
+                st.warning("⚠️ 终点 B 未设置")
+        
+        st.markdown("---")
+        
+        # 3D地图
+        st.markdown("### 🗺️ 3D航线地图")
+        
         if st.session_state.waypoints['A'] and st.session_state.waypoints['B']:
             a = st.session_state.waypoints['A']
             b = st.session_state.waypoints['B']
             
-            # 坐标转换显示
-            if "GCJ-02" in a['coord']:
-                wgs_lat, wgs_lng = gcj02_to_wgs84(a['lng'], a['lat'])
-                st.metric("A点 WGS-84坐标", f"{wgs_lat:.6f}, {wgs_lng:.6f}")
-            else:
-                gcj_lat, gcj_lng = wgs84_to_gcj02(a['lng'], a['lat'])
-                st.metric("A点 GCJ-02坐标", f"{gcj_lat:.6f}, {gcj_lng:.6f}")
-    
-    # 3D地图
-    st.markdown("### 🗺️ 3D航线地图")
-    
-    if st.session_state.waypoints['A'] and st.session_state.waypoints['B']:
-        a = st.session_state.waypoints['A']
-        b = st.session_state.waypoints['B']
-        
-        # 创建航线点
-        lat_points = [a['lat'], b['lat']]
-        lng_points = [a['lng'], b['lng']]
-        
-        # 计算距离
-        distance = calculate_distance(a['lat'], a['lng'], b['lat'], b['lng'])
-        
-        # 添加中间点（模拟航线）
-        num_points = 20
-        for i in range(num_points + 1):
-            t = i / num_points
-            lat = a['lat'] + t * (b['lat'] - a['lat'])
-            lng = a['lng'] + t * (b['lng'] - a['lng'])
-            if 0 < t < 1:
-                lat_points.append(lat)
-                lng_points.append(lng)
-        
-        # 创建3D地图
-        fig = go.Figure()
-        
-        # 航线
-        fig.add_trace(go.Scatter3d(
-            x=lng_points,
-            y=lat_points,
-            z=[altitude] * len(lng_points),
-            mode='lines+markers',
-            name='飞行航线',
-            line=dict(color='cyan', width=4),
-            marker=dict(size=5, color='red')
-        ))
-        
-        # A点标记
-        fig.add_trace(go.Scatter3d(
-            x=[a['lng']],
-            y=[a['lat']],
-            z=[altitude],
-            mode='markers+text',
-            name='起点 A',
-            text=['A'],
-            textposition='top center',
-            marker=dict(size=10, color='green')
-        ))
-        
-        # B点标记
-        fig.add_trace(go.Scatter3d(
-            x=[b['lng']],
-            y=[b['lat']],
-            z=[altitude],
-            mode='markers+text',
-            name='终点 B',
-            text=['B'],
-            textposition='top center',
-            marker=dict(size=10, color='blue')
-        ))
-        
-        # 障碍物
-        if show_obstacles:
-            obstacles = [
-                {'lat': a['lat'] + (b['lat'] - a['lat']) * 0.25, 'lng': a['lng'] + (b['lng'] - a['lng']) * 0.25, 'z': altitude * 0.6},
-                {'lat': a['lat'] + (b['lat'] - a['lat']) * 0.5, 'lng': a['lng'] + (b['lng'] - a['lng']) * 0.5 + 0.0005, 'z': altitude * 0.8},
-                {'lat': a['lat'] + (b['lat'] - a['lat']) * 0.75, 'lng': a['lng'] + (b['lng'] - a['lng']) * 0.75 - 0.0003, 'z': altitude * 0.7},
-            ]
-            for i, obs in enumerate(obstacles):
-                fig.add_trace(go.Scatter3d(
-                    x=[obs['lng']],
-                    y=[obs['lat']],
-                    z=[obs['z']],
-                    mode='markers',
-                    name=f'障碍物 {i+1}',
-                    marker=dict(size=15, color='orange', symbol='cube')
-                ))
-        
-        fig.update_layout(
-            title=f'3D航线规划 (距离: {distance:.0f}米, 高度: {altitude}米)',
-            scene=dict(
-                xaxis_title='经度',
-                yaxis_title='纬度',
-                zaxis_title='高度 (米)',
-                camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))
-            ),
-            height=600,
-            margin=dict(l=0, r=0, t=50, b=0)
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # 飞行信息
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("航线距离", f"{distance:.0f} 米")
-        with col2:
-            flight_time = distance / speed
-            st.metric("预计飞行时间", f"{flight_time:.1f} 秒")
-        with col3:
-            st.metric("设定高度", f"{altitude} 米")
-    
-    else:
-        st.info("💡 请在左侧设置A点和B点，将显示3D航线图")
+            # 计算距离
+            distance = calculate_distance(a['lat'], a['lng'], b['lat'], b['lng'])
+            flight_time = distance / st.session_state.speed
+            
+            # 显示飞行信息
+            info_col1, info_col2, info_col3 = st.columns(3)
+            with info_col1:
+                st.metric("航线距离", f"{distance:.0f} 米")
+            with info_col2:
+                st.metric("预计飞行时间", f"{flight_time:.1f} 秒")
+            with info_col3:
+                st.metric("飞行高度", f"{st.session_state.altitude} 米")
+            
+            # 创建3D地图
+            fig = go.Figure()
+            
+            # 航线
+            fig.add_trace(go.Scatter3d(
+                x=[a['lng'], b['lng']],
+                y=[a['lat'], b['lat']],
+                z=[st.session_state.altitude, st.session_state.altitude],
+                mode='lines+markers',
+                name='飞行航线',
+                line=dict(color='#00ff00', width=5),
+                marker=dict(size=8, color='red')
+            ))
+            
+            # A点
+            fig.add_trace(go.Scatter3d(
+                x=[a['lng']],
+                y=[a['lat']],
+                z=[st.session_state.altitude],
+                mode='markers+text',
+                name='起点 A',
+                text=['🟢 A'],
+                textposition='top center',
+                textfont=dict(size=14, color='green'),
+                marker=dict(size=12, color='green')
+            ))
+            
+            # B点
+            fig.add_trace(go.Scatter3d(
+                x=[b['lng']],
+                y=[b['lat']],
+                z=[st.session_state.altitude],
+                mode='markers+text',
+                name='终点 B',
+                text=['🔴 B'],
+                textposition='top center',
+                textfont=dict(size=14, color='red'),
+                marker=dict(size=12, color='red')
+            ))
+            
+            # 障碍物
+            if show_obstacles:
+                obstacles = [
+                    {'lat': a['lat'] + (b['lat'] - a['lat']) * 0.3, 
+                     'lng': a['lng'] + (b['lng'] - a['lng']) * 0.3 + 0.0003, 
+                     'z': st.session_state.altitude * 0.6},
+                    {'lat': a['lat'] + (b['lat'] - a['lat']) * 0.5, 
+                     'lng': a['lng'] + (b['lng'] - a['lng']) * 0.5, 
+                     'z': st.session_state.altitude * 0.8},
+                    {'lat': a['lat'] + (b['lat'] - a['lat']) * 0.7, 
+                     'lng': a['lng'] + (b['lng'] - a['lng']) * 0.7 - 0.0004, 
+                     'z': st.session_state.altitude * 0.7},
+                ]
+                for i, obs in enumerate(obstacles):
+                    fig.add_trace(go.Scatter3d(
+                        x=[obs['lng']],
+                        y=[obs['lat']],
+                        z=[obs['z']],
+                        mode='markers+text',
+                        name=f'障碍物 {i+1}',
+                        text=[f'🧱 {i+1}'],
+                        textposition='top center',
+                        marker=dict(size=10, color='orange', symbol='cube')
+                    ))
+            
+            fig.update_layout(
+                title='<b>3D 航线规划图</b>',
+                scene=dict(
+                    xaxis_title='经度',
+                    yaxis_title='纬度',
+                    zaxis_title='高度 (米)',
+                    camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)),
+                    aspectmode='manual',
+                    aspectratio=dict(x=1, y=1, z=0.5)
+                ),
+                height=550,
+                margin=dict(l=0, r=0, t=50, b=0),
+                showlegend=True
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("💡 请在左侧设置A点和B点，将显示3D航线图")
+            
+            # 显示示例提示
+            st.markdown("""
+            ### 📝 使用说明
+            1. 在左侧面板选择坐标系
+            2. 输入A点（起点）的经纬度
+            3. 输入B点（终点）的经纬度
+            4. 点击「设置A点」和「设置B点」按钮
+            5. 调整飞行高度和速度
+            6. 查看3D航线图
+            """)
 
 # ==================== 页面2：飞行监控 ====================
 def page_flight_monitor():
     st.header("📡 飞行监控")
     
     # 初始化心跳模拟器
-    if 'heartbeat_sim' not in st.session_state:
+    if st.session_state.heartbeat_sim is None:
         st.session_state.heartbeat_sim = HeartbeatSimulator()
     
-    # 侧边栏
+    # 侧边栏控制
     with st.sidebar:
         st.markdown("### 🎮 监控控制")
         
@@ -349,19 +403,24 @@ def page_flight_monitor():
         
         st.markdown("---")
         
-        if st.button("📡 模拟信号中断", use_container_width=True):
-            st.warning("正在模拟信号中断...")
+        # 模拟掉线
+        if st.button("📡 模拟掉线", use_container_width=True):
+            st.session_state.heartbeat_sim.last_time = time.time() - 5
+            st.warning("⚠️ 模拟信号中断...")
+            time.sleep(0.5)
+            st.rerun()
         
         st.markdown("---")
         
-        total_packets = len(st.session_state.heartbeat_sim.heartbeats)
-        st.metric("累计心跳包", total_packets)
+        # 统计
+        total = len(st.session_state.heartbeat_sim.heartbeats)
+        st.metric("累计心跳包", total)
     
     # 状态显示
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("#### 连接状态")
+        st.markdown("#### 🔗 连接状态")
         if st.session_state.heartbeat_sim.running:
             connected = st.session_state.heartbeat_sim.check_connection()
             if connected:
@@ -372,17 +431,21 @@ def page_flight_monitor():
             st.info("⏸️ 未启动")
     
     with col2:
-        st.markdown("#### 最后心跳")
-        if st.session_state.heartbeat_sim.heartbeats:
-            last = st.session_state.heartbeat_sim.heartbeats[-1]
+        st.markdown("#### ⏰ 最后心跳")
+        if st.session_state.heartbeat_sim.last_heartbeat:
+            last = st.session_state.heartbeat_sim.last_heartbeat
             st.metric("时间", last['时间'])
+            st.metric("信号强度", f"{last['信号强度']}%")
         else:
             st.metric("时间", "--")
     
     with col3:
-        st.markdown("#### 飞行状态")
+        st.markdown("#### 🚁 飞行状态")
         if st.session_state.is_flying:
-            st.info("🚁 飞行中")
+            if st.session_state.heartbeat_sim.check_connection():
+                st.info("✈️ 飞行中")
+            else:
+                st.error("⚠️ 紧急降落")
         else:
             st.info("⏸️ 待机")
     
@@ -392,35 +455,36 @@ def page_flight_monitor():
         time.sleep(0.5)
         st.rerun()
     
-    # 心跳图表
-    st.markdown("### 📈 心跳监测")
+    # 图表
+    st.markdown("### 📈 心跳监测数据")
     
     data = st.session_state.heartbeat_sim.heartbeats
     if data:
         df = pd.DataFrame(data)
         
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=list(range(1, len(df)+1)),
+        # 心跳序号图
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(
+            x=df['序号'],
             y=df['序号'],
             mode='lines+markers',
             name='心跳序号',
             line=dict(color='#00ff00', width=2),
             marker=dict(size=8, color='cyan')
         ))
-        fig.update_layout(
+        fig1.update_layout(
             title="心跳包序号变化",
             xaxis_title="时间序列",
             yaxis_title="心跳序号",
-            height=400,
+            height=350,
             template='plotly_dark'
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig1, use_container_width=True)
         
-        # 信号强度
+        # 信号强度图
         fig2 = go.Figure()
         fig2.add_trace(go.Scatter(
-            x=list(range(1, len(df)+1)),
+            x=df['序号'],
             y=df['信号强度'],
             mode='lines+fill',
             name='信号强度',
@@ -437,48 +501,58 @@ def page_flight_monitor():
         st.plotly_chart(fig2, use_container_width=True)
         
         # 数据表格
-        with st.expander("查看详细数据"):
-            st.dataframe(df, use_container_width=True)
+        with st.expander("📋 查看详细数据", expanded=False):
+            st.dataframe(df[['序号', '时间', '信号强度', '延迟']], use_container_width=True)
     else:
         st.info("💡 点击「开始监控」查看实时心跳数据")
 
 # ==================== 主程序 ====================
 def main():
-    # 页面选择
-    st.sidebar.markdown("# 🚁 无人机系统")
-    st.sidebar.markdown("---")
+    # 初始化
+    init_session_state()
     
-    page = st.sidebar.radio(
-        "选择功能页面",
-        ["🗺️ 航线规划", "📡 飞行监控"],
-        format_func=lambda x: x
+    # 页面配置
+    st.set_page_config(
+        page_title="无人机任务规划系统",
+        page_icon="🚁",
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
     
-    st.sidebar.markdown("---")
+    # 标题
+    st.title("🚁 无人机智能化任务规划系统")
+    st.markdown("---")
     
-    # 显示系统状态
-    st.sidebar.markdown("### 📊 系统状态")
-    if st.session_state.waypoints['A']:
-        st.sidebar.success("✅ A点已设")
-    else:
-        st.sidebar.warning("⚠️ A点未设")
+    # 页面选择
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🗺️ 航线规划", use_container_width=True):
+            st.session_state.page = "route"
+    with col2:
+        if st.button("📡 飞行监控", use_container_width=True):
+            st.session_state.page = "monitor"
     
-    if st.session_state.waypoints['B']:
-        st.sidebar.success("✅ B点已设")
-    else:
-        st.sidebar.warning("⚠️ B点未设")
+    if 'page' not in st.session_state:
+        st.session_state.page = "route"
     
-    # 根据选择显示页面
-    if page == "🗺️ 航线规划":
+    st.markdown("---")
+    
+    # 显示当前页面
+    if st.session_state.page == "route":
         page_route_planning()
     else:
         page_flight_monitor()
+    
+    # 页脚
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style="text-align: center; color: #666; padding: 1rem;">
+        🚁 无人机任务规划系统 | 支持坐标转换 | 3D航线规划 | 实时心跳监测
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
-    # 初始化session state
-    if 'waypoints' not in st.session_state:
-        st.session_state.waypoints = {'A': None, 'B': None}
-    if 'is_flying' not in st.session_state:
-        st.session_state.is_flying = False
-    
     main()
